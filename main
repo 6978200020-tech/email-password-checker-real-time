@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Advanced Local Account Quality Auditor</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --success: #16a34a;
+      --border: #d9e2ef;
+      --shadow: 0 18px 45px rgba(16, 24, 40, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(135deg, #dbeafe 0%, var(--bg) 45%, #eef2ff 100%);
+      color: var(--text);
+      padding: 28px;
+    }
+
+    .app {
+      max-width: 1120px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    header {
+      padding: 28px 30px 18px;
+      border-bottom: 1px solid var(--border);
+      background: #fbfdff;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    main {
+      padding: 26px 30px 30px;
+    }
+
+    label {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 240px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 15px;
+      line-height: 1.45;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 18px 0 20px;
+    }
+
+    button, a.button {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s ease, background 0.2s ease;
+    }
+
+    button:active, a.button:active {
+      transform: translateY(1px);
+    }
+
+    .primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .primary:hover {
+      background: var(--primary-dark);
+    }
+
+    .secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    .secondary:hover {
+      background: #d1d5db;
+    }
+
+    .download {
+      background: var(--success);
+      color: white;
+      pointer-events: none;
+      opacity: 0.45;
+    }
+
+    .download.ready {
+      pointer-events: auto;
+      opacity: 1;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .stat {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .stat strong {
+      font-size: 24px;
+    }
+
+    .log {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .log-title {
+      padding: 12px 14px;
+      font-weight: 700;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #results {
+      margin: 0;
+      min-height: 220px;
+      max-height: 430px;
+      overflow: auto;
+      padding: 14px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 14px;
+      white-space: pre-wrap;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 900px) {
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 700px) {
+      body {
+        padding: 14px;
+      }
+
+      main, header {
+        padding-left: 18px;
+        padding-right: 18px;
+      }
+
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      button, a.button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Advanced Local Account Quality Auditor</h1>
+      <p class="subtitle">Paste lines in <strong>email:password</strong> format. This tool uses stronger local logic for syntax, provider typos, disposable domains, duplicate detection, role accounts, password entropy, common-password checks, risk scoring, and CSV reporting. It does not log in anywhere or verify credentials against real services.</p>
+    </header>
+
+    <main>
+      <label for="accounts">Account input</label>
+      <textarea id="accounts" spellcheck="false">user1@example.com:Password123!
+invalid-email:123
+user2@gmail.com:anotherSecret9
+admin@gmial.com:password123</textarea>
+      <p class="hint">Tip: results are scored locally only. A high score means the line has better format and hygiene, not that credentials are real or usable.</p>
+
+      <div class="actions">
+        <button class="primary" id="validateBtn" type="button">Run High-Logic Audit & Build CSV</button>
+        <button class="secondary" id="clearBtn" type="button">Clear Input</button>
+        <a class="button download" id="downloadLink" href="#" download="account_quality_audit.csv">Download CSV Report</a>
+      </div>
+
+      <div class="summary" aria-live="polite">
+        <div class="stat"><span>Total Checked</span><strong id="totalCount">0</strong></div>
+        <div class="stat"><span>Pass</span><strong id="validCount">0</strong></div>
+        <div class="stat"><span>Review</span><strong id="reviewCount">0</strong></div>
+        <div class="stat"><span>Fail</span><strong id="invalidCount">0</strong></div>
+        <div class="stat"><span>Average Score</span><strong id="averageScore">0</strong></div>
+      </div>
+
+      <section class="log">
+        <div class="log-title">Audit Log</div>
+        <pre id="results">Click "Run High-Logic Audit & Build CSV" to check your input.</pre>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const emailPattern = /^(?!.*\.\.)(?!\.)(?!.*\.@)[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}$/;
+    const disposableDomains = new Set([
+      '10minutemail.com', 'guerrillamail.com', 'mailinator.com', 'tempmail.com', 'tempmail.io', 'yopmail.com',
+      'trashmail.com', 'sharklasers.com', 'getairmail.com', 'fakeinbox.com', 'throwawaymail.com'
+    ]);
+    const trustedDomains = new Set([
+      'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com',
+      'live.com', 'msn.com', 'zoho.com', 'fastmail.com', 'hey.com', 'mail.com', 'gmx.com', 'example.com'
+    ]);
+    const typoDomainMap = new Map([
+      ['gmai.com', 'gmail.com'], ['gmial.com', 'gmail.com'], ['gmail.co', 'gmail.com'], ['gmail.con', 'gmail.com'],
+      ['yaho.com', 'yahoo.com'], ['yahoo.co', 'yahoo.com'], ['yahho.com', 'yahoo.com'],
+      ['hotnail.com', 'hotmail.com'], ['hotmai.com', 'hotmail.com'], ['outlok.com', 'outlook.com'],
+      ['icloud.co', 'icloud.com'], ['protonmai.com', 'protonmail.com']
+    ]);
+    const roleLocalParts = new Set(['admin', 'administrator', 'billing', 'contact', 'help', 'info', 'mail', 'no-reply', 'noreply', 'office', 'root', 'sales', 'security', 'support', 'team']);
+    const commonPasswords = new Set([
+      'password', 'password1', 'password123', '123456', '12345678', '123456789', 'qwerty', 'qwerty123',
+      'abc123', 'admin', 'admin123', 'letmein', 'welcome', 'welcome1', 'iloveyou', '111111', '000000'
+    ]);
+    const accountsInput = document.getElementById('accounts');
+    const validateBtn = document.getElementById('validateBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const downloadLink = document.getElementById('downloadLink');
+    const results = document.getElementById('results');
+    const totalCount = document.getElementById('totalCount');
+    const validCount = document.getElementById('validCount');
+    const reviewCount = document.getElementById('reviewCount');
+    const invalidCount = document.getElementById('invalidCount');
+    const averageScore = document.getElementById('averageScore');
+    let csvObjectUrl = null;
+
+    function maskSecret(secret) {
+      if (!secret) return '';
+      if (secret.length <= 2) return '*'.repeat(secret.length);
+      if (secret.length <= 6) return secret[0] + '*'.repeat(secret.length - 1);
+      return secret.slice(0, 2) + '*'.repeat(secret.length - 4) + secret.slice(-2);
+    }
+
+    function parseAccountLine(line) {
+      if (!line.includes(':')) return [line.trim(), ''];
+      const separatorIndex = line.indexOf(':');
+      return [line.slice(0, separatorIndex).trim(), line.slice(separatorIndex + 1).trim()];
+    }
+
+    function getEmailParts(email) {
+      const parts = email.toLowerCase().split('@');
+      return {
+        local: parts.length === 2 ? parts[0] : '',
+        domain: parts.length === 2 ? parts[1] : ''
+      };
+    }
+
+    function normalizeEmailForDuplicates(email) {
+      const { local, domain } = getEmailParts(email);
+      if (!local || !domain) return email;
+      if (domain === 'gmail.com' || domain === 'googlemail.com') {
+        return `${local.split('+')[0].replace(/\./g, '')}@gmail.com`;
+      }
+      return `${local.split('+')[0]}@${domain}`;
+    }
+
+    function calculateEntropyBits(password) {
+      let pool = 0;
+      if (/[a-z]/.test(password)) pool += 26;
+      if (/[A-Z]/.test(password)) pool += 26;
+      if (/\d/.test(password)) pool += 10;
+      if (/[^A-Za-z0-9]/.test(password)) pool += 33;
+      if (!pool || !password.length) return 0;
+      return Math.round(password.length * Math.log2(pool));
+    }
+
+    function hasSequence(text) {
+      const lowered = text.toLowerCase();
+      const sequences = ['abcdefghijklmnopqrstuvwxyz', 'qwertyuiopasdfghjklzxcvbnm', '0123456789'];
+      return sequences.some(sequence => {
+        for (let index = 0; index <= sequence.length - 4; index += 1) {
+          const chunk = sequence.slice(index, index + 4);
+          if (lowered.includes(chunk) || lowered.includes(chunk.split('').reverse().join(''))) return true;
+        }
+        return false;
+      });
+    }
+
+    function hasRepeatedRuns(text) {
+      return /(.)\1{2,}/.test(text);
+    }
+
+    function assessPassword(password, emailLocal) {
+      const issues = [];
+      const warnings = [];
+      let score = 45;
+      const lowered = password.toLowerCase();
+      const entropy = calculateEntropyBits(password);
+
+      if (!password) {
+        return { score: 0, entropy: 0, rating: 'missing', issues: ['Missing password/value'], warnings: [] };
+      }
+
+      if (password.length < 8) { issues.push('Password/value is shorter than 8 characters'); score -= 25; }
+      if (password.length >= 12) score += 10;
+      if (password.length >= 16) score += 8;
+      if (!/[a-z]/.test(password)) { warnings.push('No lowercase letter'); score -= 5; }
+      if (!/[A-Z]/.test(password)) { warnings.push('No uppercase letter'); score -= 5; }
+      if (!/\d/.test(password)) { warnings.push('No number'); score -= 5; }
+      if (!/[^A-Za-z0-9]/.test(password)) { warnings.push('No symbol'); score -= 7; }
+      if (/\s/.test(password)) { issues.push('Password/value contains spaces'); score -= 20; }
+      if (commonPasswords.has(lowered)) { issues.push('Password/value appears in the local common-password list'); score -= 35; }
+      if (emailLocal && lowered.includes(emailLocal.toLowerCase().slice(0, 4))) { warnings.push('Password/value contains part of the email name'); score -= 12; }
+      if (hasSequence(password)) { warnings.push('Password/value contains a keyboard/alphabet/number sequence'); score -= 10; }
+      if (hasRepeatedRuns(password)) { warnings.push('Password/value contains repeated characters'); score -= 8; }
+      if (entropy < 45) { warnings.push(`Low estimated entropy (${entropy} bits)`); score -= 12; }
+      else if (entropy >= 75) score += 8;
+
+      score = Math.max(0, Math.min(100, score));
+      const rating = score >= 80 ? 'strong' : score >= 60 ? 'medium' : 'weak';
+      if (rating === 'weak') issues.push('Password/value strength is weak');
+      return { score, entropy, rating, issues, warnings };
+    }
+
+    function validateAccountLine(line, index, seenEmails, seenNormalizedEmails) {
+      const original = line.trim();
+      const [rawEmail, password] = parseAccountLine(original);
+      const email = rawEmail.toLowerCase();
+      const { local, domain } = getEmailParts(email);
+      const normalizedEmail = normalizeEmailForDuplicates(email);
+      const issues = [];
+      const warnings = [];
+      let score = 100;
+
+      if (!original) { issues.push('Empty line'); score -= 100; }
+      if (!original.includes(':')) { issues.push("Missing ':' separator"); score -= 35; }
+      if ((original.match(/:/g) || []).length > 1) { warnings.push('Multiple separators found; only the first colon was used'); score -= 6; }
+
+      if (!email) { issues.push('Missing email'); score -= 45; }
+      else if (!emailPattern.test(email)) { issues.push('Invalid email format'); score -= 45; }
+      else {
+        if (seenEmails.has(email)) { issues.push('Duplicate exact email in input'); score -= 35; }
+        if (seenNormalizedEmails.has(normalizedEmail)) { warnings.push('Possible duplicate after provider normalization'); score -= 12; }
+        seenEmails.add(email);
+        seenNormalizedEmails.add(normalizedEmail);
+
+        if (disposableDomains.has(domain)) { issues.push('Disposable email domain is not accepted'); score -= 35; }
+        if (typoDomainMap.has(domain)) { warnings.push(`Possible provider typo: did you mean ${typoDomainMap.get(domain)}?`); score -= 18; }
+        if (roleLocalParts.has(local)) { warnings.push('Role/shared mailbox detected'); score -= 8; }
+        if (!trustedDomains.has(domain)) { warnings.push('Domain is syntactically valid but not in the trusted/common-domain list'); score -= 4; }
+      }
+
+      const passwordAudit = assessPassword(password, local);
+      issues.push(...passwordAudit.issues);
+      warnings.push(...passwordAudit.warnings);
+      score = Math.round(Math.max(0, Math.min(100, (score * 0.55) + (passwordAudit.score * 0.45))));
+
+      const status = issues.length ? 'FAIL' : score >= 75 ? 'PASS' : 'REVIEW';
+      const recommendation = status === 'PASS'
+        ? 'No action required from local checks'
+        : status === 'REVIEW'
+          ? 'Review warnings and improve password/domain hygiene'
+          : 'Fix blocking issues before using this entry';
+
+      return {
+        row: index + 1,
+        timestamp: new Date().toLocaleString(),
+        email,
+        normalized_email: normalizedEmail,
+        domain,
+        masked_value: maskSecret(password),
+        password_rating: passwordAudit.rating,
+        entropy_bits: passwordAudit.entropy,
+        score,
+        status,
+        issues: issues.join('; ') || 'None',
+        warnings: warnings.join('; ') || 'None',
+        recommendation
+      };
+    }
+
+    function csvEscape(value) {
+      const text = String(value ?? '');
+      if (/[",\n\r]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+      return text;
+    }
+
+    function buildCsv(rows) {
+      const headers = ['row', 'timestamp', 'email', 'normalized_email', 'domain', 'masked_value', 'password_rating', 'entropy_bits', 'score', 'status', 'issues', 'warnings', 'recommendation'];
+      const lines = [headers.join(',')];
+      rows.forEach(row => {
+        lines.push(headers.map(header => csvEscape(row[header])).join(','));
+      });
+      return lines.join('\n');
+    }
+
+    function setDownload(csvText) {
+      if (csvObjectUrl) URL.revokeObjectURL(csvObjectUrl);
+      const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+      csvObjectUrl = URL.createObjectURL(blob);
+      downloadLink.href = csvObjectUrl;
+      downloadLink.classList.add('ready');
+    }
+
+    function renderLog(rows) {
+      const logLines = rows.map(row => {
+        const marker = row.status === 'PASS' ? '✅' : row.status === 'REVIEW' ? '⚠️' : '❌';
+        return `${marker} Row ${row.row} | ${row.status} | Score ${row.score}/100 | ${row.email || '(missing email)'}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
+      });
+      results.textContent = logLines.join('\n\n');
+    }
+
+    validateBtn.addEventListener('click', () => {
+      const lines = accountsInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (!lines.length) {
+        alert('Please enter at least one email:password line.');
+        return;
+      }
+
+      const seenEmails = new Set();
+      const seenNormalizedEmails = new Set();
+      const rows = lines.map((line, index) => validateAccountLine(line, index, seenEmails, seenNormalizedEmails));
+      const pass = rows.filter(row => row.status === 'PASS').length;
+      const review = rows.filter(row => row.status === 'REVIEW').length;
+      const fail = rows.filter(row => row.status === 'FAIL').length;
+      const average = Math.round(rows.reduce((sum, row) => sum + row.score, 0) / rows.length);
+
+      totalCount.textContent = rows.length;
+      validCount.textContent = pass;
+      reviewCount.textContent = review;
+      invalidCount.textContent = fail;
+      averageScore.textContent = average;
+      renderLog(rows);
+      setDownload(buildCsv(rows));
+    });
+
+    clearBtn.addEventListener('click', () => {
+      accountsInput.value = '';
+      results.textContent = 'Input cleared.';
+      totalCount.textContent = '0';
+      validCount.textContent = '0';
+      reviewCount.textContent = '0';
+      invalidCount.textContent = '0';
+      averageScore.textContent = '0';
+      downloadLink.classList.remove('ready');
+      downloadLink.href = '#';
+      if (csvObjectUrl) {
+        URL.revokeObjectURL(csvObjectUrl);
+        csvObjectUrl = null;
+      }
+    });
+  </script>
+</body>
+</html>
