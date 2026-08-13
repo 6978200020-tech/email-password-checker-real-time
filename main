@@ -144,6 +144,15 @@
       opacity: 1;
     }
 
+    .controls {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
     .summary {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -249,6 +258,12 @@ admin@gmial.com:password123</textarea>
         <a class="button download" id="downloadLink" href="#" download="account_quality_audit.csv">Download CSV Report</a>
       </div>
 
+      <div class="controls">
+        <label><input type="checkbox" id="liveCheck"> Real-time audit</label>
+        <label><input type="checkbox" id="highLog"> High-detail logs</label>
+        <span style="margin-left:auto; font-weight:600; color:var(--muted); font-size:13px">Live audits run locally in your browser</span>
+      </div>
+
       <div class="summary" aria-live="polite">
         <div class="stat"><span>Total Checked</span><strong id="totalCount">0</strong></div>
         <div class="stat"><span>Pass</span><strong id="validCount">0</strong></div>
@@ -295,7 +310,10 @@ admin@gmial.com:password123</textarea>
     const reviewCount = document.getElementById('reviewCount');
     const invalidCount = document.getElementById('invalidCount');
     const averageScore = document.getElementById('averageScore');
+    const liveCheck = document.getElementById('liveCheck');
+    const highLog = document.getElementById('highLog');
     let csvObjectUrl = null;
+    let liveTimer = null;
 
     function maskSecret(secret) {
       if (!secret) return '';
@@ -385,35 +403,42 @@ admin@gmial.com:password123</textarea>
       return { score, entropy, rating, issues, warnings };
     }
 
-    function validateAccountLine(line, index, seenEmails, seenNormalizedEmails) {
+    // verbose: when true, build a trace for each validation step
+    function validateAccountLine(line, index, seenEmails, seenNormalizedEmails, verbose = false) {
+      const trace = [];
+      trace.push(`Parsing line ${index + 1}`);
       const original = line.trim();
       const [rawEmail, password] = parseAccountLine(original);
+      trace.push(`Split email/password -> email:'${rawEmail}', password length:${password ? password.length : 0}`);
       const email = rawEmail.toLowerCase();
       const { local, domain } = getEmailParts(email);
+      trace.push(`Email parts -> local:'${local}', domain:'${domain}'`);
       const normalizedEmail = normalizeEmailForDuplicates(email);
+      trace.push(`Normalized for duplicates -> '${normalizedEmail}'`);
       const issues = [];
       const warnings = [];
       let score = 100;
 
-      if (!original) { issues.push('Empty line'); score -= 100; }
-      if (!original.includes(':')) { issues.push("Missing ':' separator"); score -= 35; }
-      if ((original.match(/:/g) || []).length > 1) { warnings.push('Multiple separators found; only the first colon was used'); score -= 6; }
+      if (!original) { issues.push('Empty line'); score -= 100; trace.push('Issue: empty line'); }
+      if (!original.includes(':')) { issues.push("Missing ':' separator"); score -= 35; trace.push("Issue: missing ':' separator"); }
+      if ((original.match(/:/g) || []).length > 1) { warnings.push('Multiple separators found; only the first colon was used'); score -= 6; trace.push('Warning: multiple separators'); }
 
-      if (!email) { issues.push('Missing email'); score -= 45; }
-      else if (!emailPattern.test(email)) { issues.push('Invalid email format'); score -= 45; }
+      if (!email) { issues.push('Missing email'); score -= 45; trace.push('Issue: missing email'); }
+      else if (!emailPattern.test(email)) { issues.push('Invalid email format'); score -= 45; trace.push('Issue: invalid email format'); }
       else {
-        if (seenEmails.has(email)) { issues.push('Duplicate exact email in input'); score -= 35; }
-        if (seenNormalizedEmails.has(normalizedEmail)) { warnings.push('Possible duplicate after provider normalization'); score -= 12; }
+        if (seenEmails.has(email)) { issues.push('Duplicate exact email in input'); score -= 35; trace.push('Issue: duplicate exact email'); }
+        if (seenNormalizedEmails.has(normalizedEmail)) { warnings.push('Possible duplicate after provider normalization'); score -= 12; trace.push('Warning: duplicate after normalization'); }
         seenEmails.add(email);
         seenNormalizedEmails.add(normalizedEmail);
 
-        if (disposableDomains.has(domain)) { issues.push('Disposable email domain is not accepted'); score -= 35; }
-        if (typoDomainMap.has(domain)) { warnings.push(`Possible provider typo: did you mean ${typoDomainMap.get(domain)}?`); score -= 18; }
-        if (roleLocalParts.has(local)) { warnings.push('Role/shared mailbox detected'); score -= 8; }
-        if (!trustedDomains.has(domain)) { warnings.push('Domain is syntactically valid but not in the trusted/common-domain list'); score -= 4; }
+        if (disposableDomains.has(domain)) { issues.push('Disposable email domain is not accepted'); score -= 35; trace.push('Issue: disposable domain'); }
+        if (typoDomainMap.has(domain)) { warnings.push(`Possible provider typo: did you mean ${typoDomainMap.get(domain)}?`); score -= 18; trace.push(`Warning: provider typo -> ${typoDomainMap.get(domain)}`); }
+        if (roleLocalParts.has(local)) { warnings.push('Role/shared mailbox detected'); score -= 8; trace.push('Warning: role/shared mailbox'); }
+        if (!trustedDomains.has(domain)) { warnings.push('Domain is syntactically valid but not in the trusted/common-domain list'); score -= 4; trace.push('Warning: uncommon domain'); }
       }
 
       const passwordAudit = assessPassword(password, local);
+      trace.push(`Password audit -> rating:${passwordAudit.rating}, entropy:${passwordAudit.entropy}, score:${passwordAudit.score}`);
       issues.push(...passwordAudit.issues);
       warnings.push(...passwordAudit.warnings);
       score = Math.round(Math.max(0, Math.min(100, (score * 0.55) + (passwordAudit.score * 0.45))));
@@ -424,6 +449,8 @@ admin@gmial.com:password123</textarea>
         : status === 'REVIEW'
           ? 'Review warnings and improve password/domain hygiene'
           : 'Fix blocking issues before using this entry';
+
+      if (verbose) trace.push(`Final status:${status}, final score:${score}`);
 
       return {
         row: index + 1,
@@ -438,7 +465,8 @@ admin@gmial.com:password123</textarea>
         status,
         issues: issues.join('; ') || 'None',
         warnings: warnings.join('; ') || 'None',
-        recommendation
+        recommendation,
+        trace: trace.join('\n')
       };
     }
 
@@ -465,24 +493,35 @@ admin@gmial.com:password123</textarea>
       downloadLink.classList.add('ready');
     }
 
-    function renderLog(rows) {
+    function renderLog(rows, verbose) {
       const logLines = rows.map(row => {
         const marker = row.status === 'PASS' ? '✅' : row.status === 'REVIEW' ? '⚠️' : '❌';
-        return `${marker} Row ${row.row} | ${row.status} | Score ${row.score}/100 | ${row.email || '(missing email)'}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
+        let line = `${marker} Row ${row.row} | ${row.status} | Score ${row.score}/100 | ${row.email || '(missing email)'}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
+        if (verbose && row.trace) {
+          line += `\n   Trace:\n     ${row.trace.replace(/\n/g, '\n     ')}`;
+        }
+        return line;
       });
       results.textContent = logLines.join('\n\n');
     }
 
-    validateBtn.addEventListener('click', () => {
+    function runAudit(verbose = false) {
       const lines = accountsInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       if (!lines.length) {
-        alert('Please enter at least one email:password line.');
+        results.textContent = 'No input to audit.';
+        totalCount.textContent = '0';
+        validCount.textContent = '0';
+        reviewCount.textContent = '0';
+        invalidCount.textContent = '0';
+        averageScore.textContent = '0';
+        downloadLink.classList.remove('ready');
+        downloadLink.href = '#';
         return;
       }
 
       const seenEmails = new Set();
       const seenNormalizedEmails = new Set();
-      const rows = lines.map((line, index) => validateAccountLine(line, index, seenEmails, seenNormalizedEmails));
+      const rows = lines.map((line, index) => validateAccountLine(line, index, seenEmails, seenNormalizedEmails, verbose));
       const pass = rows.filter(row => row.status === 'PASS').length;
       const review = rows.filter(row => row.status === 'REVIEW').length;
       const fail = rows.filter(row => row.status === 'FAIL').length;
@@ -493,9 +532,11 @@ admin@gmial.com:password123</textarea>
       reviewCount.textContent = review;
       invalidCount.textContent = fail;
       averageScore.textContent = average;
-      renderLog(rows);
+      renderLog(rows, verbose);
       setDownload(buildCsv(rows));
-    });
+    }
+
+    validateBtn.addEventListener('click', () => runAudit(highLog.checked));
 
     clearBtn.addEventListener('click', () => {
       accountsInput.value = '';
@@ -512,6 +553,22 @@ admin@gmial.com:password123</textarea>
         csvObjectUrl = null;
       }
     });
+
+    function scheduleLiveAudit() {
+      if (!liveCheck.checked) return;
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => runAudit(highLog.checked), 600);
+    }
+
+    accountsInput.addEventListener('input', scheduleLiveAudit);
+    liveCheck.addEventListener('change', () => {
+      if (liveCheck.checked) runAudit(highLog.checked);
+    });
+    highLog.addEventListener('change', () => {
+      // re-run audit with new verbosity if there is input
+      if (accountsInput.value.trim()) runAudit(highLog.checked);
+    });
+
   </script>
 </body>
 </html>
