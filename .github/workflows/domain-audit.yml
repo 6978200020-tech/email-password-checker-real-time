@@ -1,0 +1,78 @@
+name: Authorized domain audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain_file:
+        description: "Authorized domain file in the repository"
+        required: false
+        default: "domains.txt"
+      workers:
+        description: "Bounded parallel workers (1-2)"
+        required: false
+        default: "2"
+  push:
+    paths:
+      - "domains.txt"
+      - "audit_domains.py"
+      - "smtp_probe.py"
+      - ".github/workflows/domain-audit.yml"
+  pull_request:
+    paths:
+      - "domains.txt"
+      - "audit_domains.py"
+      - "smtp_probe.py"
+      - ".github/workflows/domain-audit.yml"
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authorized-domain-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Load authorized domain list
+        env:
+          DOMAIN_FILE: ${{ inputs.domain_file || 'domains.txt' }}
+        run: |
+          case "$DOMAIN_FILE" in
+            domains.txt|domains.example.txt) ;;
+            *) echo "Only repository domain list files are allowed."; exit 1 ;;
+          esac
+          if [ ! -f "$DOMAIN_FILE" ]; then
+            echo "Missing $DOMAIN_FILE. Copy domains.example.txt and add authorized domains."
+            exit 1
+          fi
+      - name: Run bounded domain audit
+        env:
+          DOMAIN_FILE: ${{ inputs.domain_file || 'domains.txt' }}
+          WORKERS: ${{ inputs.workers || '2' }}
+        run: |
+          case "$WORKERS" in
+            1|2) ;;
+            *) echo "Workers must be 1 or 2."; exit 1 ;;
+          esac
+          python audit_domains.py --file "$DOMAIN_FILE" --workers "$WORKERS" --output domain-audit.json
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-audit-report
+          path: domain-audit.json
+          retention-days: 7

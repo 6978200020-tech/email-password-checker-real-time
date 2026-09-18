@@ -1,0 +1,2 @@
+# Copy to domains.txt and add only domains you own or are authorized to assess.
+example.com

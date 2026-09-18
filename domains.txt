@@ -1,0 +1,3 @@
+# Replace this starter entry with domains you own or are authorized to assess.
+# One domain per line; comments and blank lines are ignored.
+example.com

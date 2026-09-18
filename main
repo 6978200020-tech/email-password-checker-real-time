@@ -241,7 +241,7 @@
   <div class="app">
     <header>
       <h1>Advanced Local Account Quality Auditor</h1>
-      <p class="subtitle">Paste lines in <strong>email:password</strong> format. This tool uses stronger local logic for syntax, provider typos, disposable domains, duplicate detection, role accounts, password entropy, common-password checks, risk scoring, and CSV reporting. It does not log in anywhere or verify credentials against real services.</p>
+      <p class="subtitle">Paste lines in <strong>email:password</strong> format. Local checks cover syntax and password hygiene; optional real domain checks inspect DNS/MX/SPF/DMARC and conservative SMTP reachability. Passwords never leave this browser. Domain checks do not log in, verify credentials, enumerate mailboxes, or prove that a specific account exists.</p>
     </header>
 
     <main>
@@ -250,18 +250,20 @@
 invalid-email:123
 user2@gmail.com:anotherSecret9
 admin@gmial.com:password123</textarea>
-      <p class="hint">Tip: results are scored locally only. A high score means the line has better format and hygiene, not that credentials are real or usable.</p>
+      <p class="hint">Tip: results are scored locally only. A high score means better format and password hygiene, not that credentials are real or usable. <strong>ACTIVE</strong> means the domain's mail infrastructure responded; it does not confirm the mailbox or user.</p>
 
       <div class="actions">
-        <button class="primary" id="validateBtn" type="button">Run High-Logic Audit & Build CSV</button>
+        <button class="primary" id="validateBtn" type="button">Run Audit & Build CSV</button>
+        <button class="primary" id="runNowBtn" type="button">Run Now (Real Domain)</button>
         <button class="secondary" id="clearBtn" type="button">Clear Input</button>
         <a class="button download" id="downloadLink" href="#" download="account_quality_audit.csv">Download CSV Report</a>
       </div>
 
       <div class="controls">
-        <label><input type="checkbox" id="liveCheck"> Real-time audit</label>
+        <label><input type="checkbox" id="liveCheck"> Local real-time audit</label>
         <label><input type="checkbox" id="highLog"> High-detail logs</label>
-        <span style="margin-left:auto; font-weight:600; color:var(--muted); font-size:13px">Live audits run locally in your browser</span>
+        <label><input type="checkbox" id="realDomainCheck"> Real DNS/MX checks</label>
+        <span id="apiStatus" style="margin-left:auto; font-weight:600; color:var(--muted); font-size:13px">Paused until you run an audit</span>
       </div>
 
       <div class="summary" aria-live="polite">
@@ -274,7 +276,7 @@ admin@gmial.com:password123</textarea>
 
       <section class="log">
         <div class="log-title">Audit Log</div>
-        <pre id="results">Click "Run High-Logic Audit & Build CSV" to check your input.</pre>
+        <pre id="results">Click "Run Audit & Build CSV" to check your input.</pre>
       </section>
     </main>
   </div>
@@ -302,6 +304,7 @@ admin@gmial.com:password123</textarea>
     ]);
     const accountsInput = document.getElementById('accounts');
     const validateBtn = document.getElementById('validateBtn');
+    const runNowBtn = document.getElementById('runNowBtn');
     const clearBtn = document.getElementById('clearBtn');
     const downloadLink = document.getElementById('downloadLink');
     const results = document.getElementById('results');
@@ -312,8 +315,11 @@ admin@gmial.com:password123</textarea>
     const averageScore = document.getElementById('averageScore');
     const liveCheck = document.getElementById('liveCheck');
     const highLog = document.getElementById('highLog');
+    const realDomainCheck = document.getElementById('realDomainCheck');
+    const apiStatus = document.getElementById('apiStatus');
     let csvObjectUrl = null;
     let liveTimer = null;
+    let auditRunId = 0;
 
     function maskSecret(secret) {
       if (!secret) return '';
@@ -448,7 +454,7 @@ admin@gmial.com:password123</textarea>
         ? 'No action required from local checks'
         : status === 'REVIEW'
           ? 'Review warnings and improve password/domain hygiene'
-          : 'Fix blocking issues before using this entry';
+          : 'Local quality check failed; this does not verify or reject the provider account';
 
       if (verbose) trace.push(`Final status:${status}, final score:${score}`);
 
@@ -477,7 +483,7 @@ admin@gmial.com:password123</textarea>
     }
 
     function buildCsv(rows) {
-      const headers = ['row', 'timestamp', 'email', 'normalized_email', 'domain', 'masked_value', 'password_rating', 'entropy_bits', 'score', 'status', 'issues', 'warnings', 'recommendation'];
+      const headers = ['row', 'timestamp', 'email', 'normalized_email', 'domain', 'masked_value', 'password_rating', 'entropy_bits', 'score', 'status', 'domain_status', 'domain_confidence', 'domain_health_score', 'mail_provider', 'dns_resolves', 'mx_hosts', 'smtp_connected', 'smtp_reachable', 'smtp_blocked_or_policy', 'smtp_tested', 'dkim', 'mta_sts', 'mta_sts_policy', 'tls_rpt', 'issues', 'warnings', 'recommendation'];
       const lines = [headers.join(',')];
       rows.forEach(row => {
         lines.push(headers.map(header => csvEscape(row[header])).join(','));
@@ -496,7 +502,13 @@ admin@gmial.com:password123</textarea>
     function renderLog(rows, verbose) {
       const logLines = rows.map(row => {
         const marker = row.status === 'PASS' ? '✅' : row.status === 'REVIEW' ? '⚠️' : '❌';
-        let line = `${marker} Row ${row.row} | ${row.status} | Score ${row.score}/100 | ${row.email || '(missing email)'}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
+        const localStatus = row.status === 'FAIL' && row.domain_status === 'ACTIVE'
+          ? 'FAIL (local hygiene only)'
+          : row.status;
+        const domainLine = row.domain_status
+          ? `\n   Domain: ${row.domain_status} (${row.domain_confidence || 'unknown'} confidence, health ${row.domain_health_score ?? 'n/a'}/100) | Provider: ${row.mail_provider || 'unknown'} | DNS: ${row.dns_resolves || 'unknown'} | MX: ${row.mx_hosts || 'none'} | SMTP: ${row.smtp_reachable} (connected: ${row.smtp_connected || 'unknown'}, tested: ${row.smtp_tested || 'no'}, policy: ${row.smtp_blocked_or_policy || 'no'}) | DKIM: ${row.dkim || 'not found'} | MTA-STS: ${row.mta_sts || 'not found'} (${row.mta_sts_policy || 'file not checked'}) | TLS-RPT: ${row.tls_rpt || 'not found'}`
+          : '\n   Domain: not checked (enable Real DNS/MX checks)';
+        let line = `${marker} Row ${row.row} | ${localStatus} | Score ${row.score}/100 | ${row.email || '(missing email)'}${domainLine}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
         if (verbose && row.trace) {
           line += `\n   Trace:\n     ${row.trace.replace(/\n/g, '\n     ')}`;
         }
@@ -505,7 +517,72 @@ admin@gmial.com:password123</textarea>
       results.textContent = logLines.join('\n\n');
     }
 
-    function runAudit(verbose = false) {
+    async function fetchDomainResult(domain) {
+      if (!domain) return { error: 'No valid domain' };
+      if (window.location.protocol === 'file:') {
+        return { error: 'Start server.py and open http://127.0.0.1:8765' };
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch(`/api/probe?domain=${encodeURIComponent(domain)}`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' }
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) return { error: payload.error || 'Domain check failed' };
+        return payload.result;
+      } catch (error) {
+        return { error: error.name === 'AbortError' ? 'Domain check timed out' : error.message };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function attachDomainResults(rows, runId) {
+      const domains = [...new Set(rows.filter(row => row.domain).map(row => row.domain))];
+      apiStatus.textContent = `Checking ${domains.length} domain(s)...`;
+      const resultsByDomain = new Map();
+      for (const domain of domains) {
+        if (runId !== auditRunId) return false;
+        resultsByDomain.set(domain, await fetchDomainResult(domain));
+      }
+      if (runId !== auditRunId) return false;
+      rows.forEach(row => {
+        const result = resultsByDomain.get(row.domain);
+        if (!result) return;
+        if (result.error) {
+          row.domain_status = `ERROR: ${result.error}`;
+          row.mx_hosts = '';
+          row.smtp_reachable = 'unknown';
+          row.warnings = `${row.warnings}; Real domain check unavailable`;
+          return;
+        }
+        const mx = result.mx_lookup && result.mx_lookup.mx ? result.mx_lookup.mx : [];
+        row.domain_status = String(result.status || 'unknown').toUpperCase();
+        row.domain_confidence = result.confidence || 'unknown';
+        row.domain_health_score = result.health_score ?? 'n/a';
+        row.mail_provider = result.mail_provider || 'Other/Custom';
+        row.dns_resolves = result.signals && result.signals.dns_resolves ? 'yes' : 'no';
+        row.mx_hosts = mx.map(item => item[1]).join(' | ');
+        row.smtp_connected = result.signals && result.signals.smtp_connected ? 'yes' : 'no';
+        row.smtp_reachable = result.mx_probes.some(probe => probe.reachable) ? 'yes' : 'no';
+        row.smtp_blocked_or_policy = result.signals && result.signals.smtp_blocked_or_policy ? 'yes' : 'no';
+        row.smtp_tested = result.signals && result.signals.smtp_tested ? 'yes' : 'no';
+        row.dkim = Object.keys((result.mail_security && result.mail_security.dkim) || {}).join(' | ') || 'not found';
+        row.mta_sts = result.mail_security && result.mail_security.mta_sts && result.mail_security.mta_sts.txt ? 'published' : 'not found';
+        row.mta_sts_policy = result.mail_security && result.mail_security.mta_sts_policy && result.mail_security.mta_sts_policy.valid ? 'valid' : 'missing/invalid';
+        row.tls_rpt = result.mail_security && result.mail_security.tls_rpt && result.mail_security.tls_rpt.txt ? 'published' : 'not found';
+        if (result.notes && result.notes.length) row.warnings = `${row.warnings}; ${result.notes.join('; ')}`;
+      });
+      apiStatus.textContent = 'Real domain checks complete';
+      return true;
+    }
+
+    async function runAudit(verbose = false) {
+      const runId = ++auditRunId;
+      validateBtn.disabled = true;
+      validateBtn.textContent = realDomainCheck.checked ? 'Checking domains...' : 'Running audit...';
       const lines = accountsInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       if (!lines.length) {
         results.textContent = 'No input to audit.';
@@ -516,12 +593,23 @@ admin@gmial.com:password123</textarea>
         averageScore.textContent = '0';
         downloadLink.classList.remove('ready');
         downloadLink.href = '#';
+        validateBtn.disabled = false;
+        validateBtn.textContent = 'Run Audit & Build CSV';
         return;
       }
 
       const seenEmails = new Set();
       const seenNormalizedEmails = new Set();
       const rows = lines.map((line, index) => validateAccountLine(line, index, seenEmails, seenNormalizedEmails, verbose));
+      if (realDomainCheck.checked) {
+        const current = await attachDomainResults(rows, runId);
+        if (!current) {
+          validateBtn.disabled = false;
+          validateBtn.textContent = 'Run Audit & Build CSV';
+          return;
+        }
+      }
+      else apiStatus.textContent = 'Domain checks are opt-in';
       const pass = rows.filter(row => row.status === 'PASS').length;
       const review = rows.filter(row => row.status === 'REVIEW').length;
       const fail = rows.filter(row => row.status === 'FAIL').length;
@@ -534,9 +622,16 @@ admin@gmial.com:password123</textarea>
       averageScore.textContent = average;
       renderLog(rows, verbose);
       setDownload(buildCsv(rows));
+      validateBtn.disabled = false;
+      validateBtn.textContent = 'Run Audit & Build CSV';
     }
 
     validateBtn.addEventListener('click', () => runAudit(highLog.checked));
+    runNowBtn.addEventListener('click', () => {
+      realDomainCheck.checked = true;
+      apiStatus.textContent = 'Running real domain audit...';
+      runAudit(highLog.checked);
+    });
 
     clearBtn.addEventListener('click', () => {
       accountsInput.value = '';
@@ -566,6 +661,9 @@ admin@gmial.com:password123</textarea>
     });
     highLog.addEventListener('change', () => {
       // re-run audit with new verbosity if there is input
+      if (accountsInput.value.trim()) runAudit(highLog.checked);
+    });
+    realDomainCheck.addEventListener('change', () => {
       if (accountsInput.value.trim()) runAudit(highLog.checked);
     });
 

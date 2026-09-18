@@ -1,0 +1,4 @@
+instructions: "C:\\Users\\AJ\\.copilot\\repos\\email-password-checker-real-time/.github/github-app.yml"
+automation:
+  auto_issue_session: true
+  remote_control: true
