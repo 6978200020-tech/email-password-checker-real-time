@@ -250,6 +250,11 @@
 invalid-email:123
 user2@gmail.com:anotherSecret9
 admin@gmial.com:password123</textarea>
+      <div class="file-row">
+        <label for="accountFile">Load a local list</label>
+        <input id="accountFile" type="file" accept=".txt,.csv,text/plain,text/csv" />
+        <span class="hint">Read locally only; max 5 MB / 5,000 lines.</span>
+      </div>
       <p class="hint">Tip: results are scored locally only. A high score means better format and password hygiene, not that credentials are real or usable. <strong>ACTIVE</strong> means the domain's mail infrastructure responded; it does not confirm the mailbox or user.</p>
 
       <div class="actions">
@@ -303,6 +308,7 @@ admin@gmial.com:password123</textarea>
       'abc123', 'admin', 'admin123', 'letmein', 'welcome', 'welcome1', 'iloveyou', '111111', '000000'
     ]);
     const accountsInput = document.getElementById('accounts');
+    const accountFile = document.getElementById('accountFile');
     const validateBtn = document.getElementById('validateBtn');
     const runNowBtn = document.getElementById('runNowBtn');
     const clearBtn = document.getElementById('clearBtn');
@@ -656,6 +662,30 @@ admin@gmial.com:password123</textarea>
     }
 
     accountsInput.addEventListener('input', scheduleLiveAudit);
+    accountFile.addEventListener('change', async () => {
+      const file = accountFile.files && accountFile.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) {
+        accountFile.value = '';
+        results.textContent = 'File is larger than 5 MB. Choose a smaller local list.';
+        return;
+      }
+      try {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter(line => line.trim());
+        if (lines.length > 5000) {
+          accountFile.value = '';
+          results.textContent = 'File contains more than 5,000 non-empty lines.';
+          return;
+        }
+        accountsInput.value = text;
+        results.textContent = `Loaded ${lines.length} local line(s) from ${file.name}.`;
+        scheduleLiveAudit();
+      } catch (error) {
+        accountFile.value = '';
+        results.textContent = 'Unable to read the selected local file.';
+      }
+    });
     liveCheck.addEventListener('change', () => {
       if (liveCheck.checked) runAudit(highLog.checked);
     });

@@ -24,6 +24,9 @@ infrastructure.
    ```
 
 6. শুধু local password/format check চাইলে **Real DNS/MX checks** unchecked রাখুন।
+   `.txt` বা `.csv` list চাইলে **Load a local list** ব্যবহার করতে পারেন; file
+   browser-এর ভেতরেই পড়া হয়, server-এ upload হয় না, এবং 5 MB/5,000-line limit
+   আছে।
    Domain সত্যিই mail server-এ active কি না দেখতে সেটি checked করে **Run Audit &
    Build CSV** চাপুন।
 7. কাজ শেষ হলে terminal window-তে `Ctrl+C` চাপুন।
