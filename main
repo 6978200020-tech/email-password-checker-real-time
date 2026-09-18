@@ -160,6 +160,21 @@
       margin-bottom: 20px;
     }
 
+    .progress {
+      height: 8px;
+      margin: 0 0 16px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e5e7eb;
+    }
+
+    .progress-bar {
+      width: 0;
+      height: 100%;
+      background: var(--primary);
+      transition: width 180ms ease;
+    }
+
     .stat {
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -278,6 +293,9 @@ admin@gmial.com:password123</textarea>
         <div class="stat"><span>Fail</span><strong id="invalidCount">0</strong></div>
         <div class="stat"><span>Average Score</span><strong id="averageScore">0</strong></div>
       </div>
+      <div class="progress" role="progressbar" aria-label="Audit progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
 
       <section class="log">
         <div class="log-title">Audit Log</div>
@@ -319,6 +337,8 @@ admin@gmial.com:password123</textarea>
     const reviewCount = document.getElementById('reviewCount');
     const invalidCount = document.getElementById('invalidCount');
     const averageScore = document.getElementById('averageScore');
+    const progress = document.querySelector('.progress');
+    const progressBar = document.getElementById('progressBar');
     const liveCheck = document.getElementById('liveCheck');
     const highLog = document.getElementById('highLog');
     const realDomainCheck = document.getElementById('realDomainCheck');
@@ -326,6 +346,12 @@ admin@gmial.com:password123</textarea>
     let csvObjectUrl = null;
     let liveTimer = null;
     let auditRunId = 0;
+
+    function setProgress(completed, total) {
+      const percent = total ? Math.round((completed / total) * 100) : 0;
+      progressBar.style.width = `${percent}%`;
+      progress.setAttribute('aria-valuenow', String(percent));
+    }
 
     function maskSecret(secret) {
       if (!secret) return '';
@@ -549,9 +575,11 @@ admin@gmial.com:password123</textarea>
       const domains = [...new Set(rows.filter(row => row.domain).map(row => row.domain))];
       apiStatus.textContent = `Checking ${domains.length} domain(s)...`;
       const resultsByDomain = new Map();
-      for (const domain of domains) {
+      for (const [index, domain] of domains.entries()) {
         if (runId !== auditRunId) return false;
+        apiStatus.textContent = `Checking domain ${index + 1}/${domains.length}: ${domain}`;
         resultsByDomain.set(domain, await fetchDomainResult(domain));
+        setProgress(index + 1, domains.length);
       }
       if (runId !== auditRunId) return false;
       rows.forEach(row => {
@@ -590,6 +618,7 @@ admin@gmial.com:password123</textarea>
       validateBtn.disabled = true;
       validateBtn.textContent = realDomainCheck.checked ? 'Checking domains...' : 'Running audit...';
       const lines = accountsInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      setProgress(0, realDomainCheck.checked ? new Set(lines.map(line => getEmailParts(parseAccountLine(line)[0].toLowerCase()).domain).filter(Boolean)).size : 1);
       if (!lines.length) {
         results.textContent = 'No input to audit.';
         totalCount.textContent = '0';
@@ -597,6 +626,7 @@ admin@gmial.com:password123</textarea>
         reviewCount.textContent = '0';
         invalidCount.textContent = '0';
         averageScore.textContent = '0';
+        setProgress(0, 0);
         downloadLink.classList.remove('ready');
         downloadLink.href = '#';
         validateBtn.disabled = false;
