@@ -148,6 +148,20 @@ After the initial repository setup, no button click is required for daily
 monitoring. GitHub may delay scheduled workflows, and Actions quotas still
 apply.
 
+### Quick start from another computer
+
+This repository is already public. The supported browser-based quick start is
+GitHub Codespaces:
+
+<https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=6978200020-tech%2Femail-password-checker-real-time>
+
+Sign in to GitHub, create the Codespace, and wait for the forwarded
+**Domain auditor** port to open. The dev container installs the dependency and
+starts the local API automatically. Codespaces requires an eligible GitHub
+account and available quota; it is not an anonymous public VPS, and startup
+time depends on GitHub capacity. The forwarded URL is protected by GitHub
+authentication and should not be shared publicly.
+
 When the local browser page or workflow is stopped, it remains stopped rather
 than consuming resources. Use the UI **Run Now (Real Domain)** button for an
 on-demand local run, or GitHub Actions **Run workflow** for an on-demand remote
