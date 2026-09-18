@@ -57,6 +57,23 @@ PROVIDER_MX_MARKERS = {
     "Microsoft 365": ("protection.outlook.com", "mail.protection.outlook.com"),
     "Proton Mail": ("protonmail.ch", "protonmail.com"),
 }
+CONSUMER_GOOGLE_DOMAINS = {"gmail.com", "googlemail.com"}
+ROLE_LOCAL_PARTS = {
+    "admin", "administrator", "billing", "contact", "help", "info", "mail",
+    "no-reply", "noreply", "office", "root", "sales", "security", "support",
+    "team",
+}
+COMMON_DOMAIN_TYPOS = {
+    "gmai.com": "gmail.com",
+    "gmial.com": "gmail.com",
+    "gmail.co": "gmail.com",
+    "gmail.con": "gmail.com",
+    "yaho.com": "yahoo.com",
+    "yahho.com": "yahoo.com",
+    "hotnail.com": "hotmail.com",
+    "hotmai.com": "hotmail.com",
+    "outlok.com": "outlook.com",
+}
 
 _DNS_CACHE = {}
 _DNS_CACHE_LOCK = threading.Lock()
@@ -127,6 +144,77 @@ def domain_summary(domain):
         "normalized": normalized,
         "valid": bool(normalized),
     }
+
+
+def split_email_address(email):
+    """Parse an address without implying that the mailbox exists."""
+    value = str(email or "").strip()
+    if value.count("@") != 1:
+        return {"input": value, "valid": False, "local": "", "domain": ""}
+    local, raw_domain = value.rsplit("@", 1)
+    domain = normalize_domain(raw_domain)
+    valid = bool(local and domain and len(local) <= 64 and not any(
+        char.isspace() for char in local
+    ))
+    return {
+        "input": value,
+        "valid": valid,
+        "local": local if valid else "",
+        "domain": domain if valid else "",
+    }
+
+
+def build_email_report(email, probe_domain_result=True):
+    """Return public domain evidence only; never check credentials or a mailbox."""
+    address = split_email_address(email)
+    report = {
+        "email": address["input"],
+        "valid_email_syntax": address["valid"],
+        "account_verification": "not_performed",
+        "credential_check": "not_performed",
+        "privacy_note": (
+            "This report uses public DNS/MX evidence and cannot prove that a "
+            "specific mailbox or password exists."
+        ),
+    }
+    if not address["valid"]:
+        report["status"] = "invalid_email"
+        return report
+    report["domain"] = address["domain"]
+    local = address["local"]
+    report["local_part"] = local
+    report["address_type"] = "role_or_shared" if local.lower() in ROLE_LOCAL_PARTS else "individual_or_unknown"
+    report["domain_suggestion"] = COMMON_DOMAIN_TYPOS.get(address["domain"], "")
+    if address["domain"] in CONSUMER_GOOGLE_DOMAINS:
+        report["google_account_scope"] = "Google consumer mail domain"
+        report["gmail_alias_notes"] = [
+            "Dots in the Gmail local part are generally ignored for delivery.",
+            "A plus suffix is commonly used for labels, such as user+tag@gmail.com.",
+        ]
+    else:
+        report["google_account_scope"] = "Not a consumer Gmail domain"
+    if not probe_domain_result:
+        report["status"] = "syntax_valid"
+        return report
+    result = probe_domain(address["domain"], probe_mx_connect=False)
+    report["domain_report"] = result
+    provider = result.get("mail_provider", "Other/Custom")
+    report["mail_provider"] = provider
+    if provider == "Google Workspace":
+        report["provider_scope"] = (
+            "Google-hosted mail infrastructure detected for this domain"
+        )
+    else:
+        report["provider_scope"] = "Public mail infrastructure classification only"
+    signals = result.get("signals", {})
+    if result.get("status") == "active" and signals.get("mail_exchange_present"):
+        report["deliverability_signal"] = "public_mail_infrastructure_present"
+    elif signals.get("mail_exchange_present"):
+        report["deliverability_signal"] = "public_mail_infrastructure_uncertain"
+    else:
+        report["deliverability_signal"] = "no_confirmed_mail_exchange"
+    report["status"] = "domain_reported"
+    return report
 
 
 def lookup_mx(domain):

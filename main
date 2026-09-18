@@ -274,6 +274,7 @@ admin@gmial.com:password123</textarea>
 
       <div class="actions">
         <button class="primary" id="validateBtn" type="button">Run Audit & Build CSV</button>
+        <button class="secondary" id="emailReportBtn" type="button">Public Email Report</button>
         <button class="primary" id="runNowBtn" type="button">Run Now (Real Domain)</button>
         <button class="secondary" id="clearBtn" type="button">Clear Input</button>
         <a class="button download" id="downloadLink" href="#" download="account_quality_audit.csv">Download CSV Report</a>
@@ -288,10 +289,10 @@ admin@gmial.com:password123</textarea>
 
       <div class="summary" aria-live="polite">
         <div class="stat"><span>Total Checked</span><strong id="totalCount">0</strong></div>
-        <div class="stat"><span>Pass</span><strong id="validCount">0</strong></div>
-        <div class="stat"><span>Review</span><strong id="reviewCount">0</strong></div>
-        <div class="stat"><span>Fail</span><strong id="invalidCount">0</strong></div>
-        <div class="stat"><span>Average Score</span><strong id="averageScore">0</strong></div>
+        <div class="stat"><span>Local Pass</span><strong id="validCount">0</strong></div>
+        <div class="stat"><span>Local Review</span><strong id="reviewCount">0</strong></div>
+        <div class="stat"><span>Local Fail</span><strong id="invalidCount">0</strong></div>
+        <div class="stat"><span>Local Score</span><strong id="averageScore">0</strong></div>
       </div>
       <div class="progress" role="progressbar" aria-label="Audit progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div class="progress-bar" id="progressBar"></div>
@@ -328,6 +329,7 @@ admin@gmial.com:password123</textarea>
     const accountsInput = document.getElementById('accounts');
     const accountFile = document.getElementById('accountFile');
     const validateBtn = document.getElementById('validateBtn');
+    const emailReportBtn = document.getElementById('emailReportBtn');
     const runNowBtn = document.getElementById('runNowBtn');
     const clearBtn = document.getElementById('clearBtn');
     const downloadLink = document.getElementById('downloadLink');
@@ -515,7 +517,7 @@ admin@gmial.com:password123</textarea>
     }
 
     function buildCsv(rows) {
-      const headers = ['row', 'timestamp', 'email', 'normalized_email', 'domain', 'masked_value', 'password_rating', 'entropy_bits', 'score', 'status', 'domain_status', 'domain_confidence', 'domain_health_score', 'mail_provider', 'dns_resolves', 'mx_hosts', 'smtp_connected', 'smtp_reachable', 'smtp_blocked_or_policy', 'smtp_tested', 'dkim', 'mta_sts', 'mta_sts_policy', 'tls_rpt', 'issues', 'warnings', 'recommendation'];
+      const headers = ['row', 'timestamp', 'email', 'normalized_email', 'domain', 'masked_value', 'password_rating', 'entropy_bits', 'score', 'status', 'domain_status', 'domain_confidence', 'domain_health_score', 'mail_provider', 'provider_scope', 'account_verification', 'credential_check', 'dns_resolves', 'mx_hosts', 'smtp_connected', 'smtp_reachable', 'smtp_blocked_or_policy', 'smtp_tested', 'dkim', 'mta_sts', 'mta_sts_policy', 'tls_rpt', 'issues', 'warnings', 'recommendation'];
       const lines = [headers.join(',')];
       rows.forEach(row => {
         lines.push(headers.map(header => csvEscape(row[header])).join(','));
@@ -538,7 +540,7 @@ admin@gmial.com:password123</textarea>
           ? 'FAIL (local hygiene only)'
           : row.status;
         const domainLine = row.domain_status
-          ? `\n   Domain: ${row.domain_status} (${row.domain_confidence || 'unknown'} confidence, health ${row.domain_health_score ?? 'n/a'}/100) | Provider: ${row.mail_provider || 'unknown'} | DNS: ${row.dns_resolves || 'unknown'} | MX: ${row.mx_hosts || 'none'} | SMTP: ${row.smtp_reachable} (connected: ${row.smtp_connected || 'unknown'}, tested: ${row.smtp_tested || 'no'}, policy: ${row.smtp_blocked_or_policy || 'no'}) | DKIM: ${row.dkim || 'not found'} | MTA-STS: ${row.mta_sts || 'not found'} (${row.mta_sts_policy || 'file not checked'}) | TLS-RPT: ${row.tls_rpt || 'not found'}`
+          ? `\n   Domain: ${row.domain_status} (${row.domain_confidence || 'unknown'} confidence, health ${row.domain_health_score ?? 'n/a'}/100) | Provider: ${row.mail_provider || 'unknown'} | Scope: ${row.provider_scope || 'public infrastructure only'} | Account verification: not performed | DNS: ${row.dns_resolves || 'unknown'} | MX: ${row.mx_hosts || 'none'} | SMTP: ${row.smtp_reachable} (connected: ${row.smtp_connected || 'unknown'}, tested: ${row.smtp_tested || 'no'}, policy: ${row.smtp_blocked_or_policy || 'no'}) | DKIM: ${row.dkim || 'not found'} | MTA-STS: ${row.mta_sts || 'not found'} (${row.mta_sts_policy || 'file not checked'}) | TLS-RPT: ${row.tls_rpt || 'not found'}`
           : '\n   Domain: not checked (enable Real DNS/MX checks)';
         let line = `${marker} Row ${row.row} | ${localStatus} | Score ${row.score}/100 | ${row.email || '(missing email)'}${domainLine}\n   Issues: ${row.issues}\n   Warnings: ${row.warnings}\n   Recommendation: ${row.recommendation}`;
         if (verbose && row.trace) {
@@ -549,11 +551,63 @@ admin@gmial.com:password123</textarea>
       results.textContent = logLines.join('\n\n');
     }
 
+    async function runEmailReport() {
+        const firstLine = accountsInput.value.split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
+        const [email] = parseAccountLine(firstLine);
+        if (!email) {
+          results.textContent = 'Enter an email address first. The password/value is not sent for this report.';
+          return;
+        }
+        emailReportBtn.disabled = true;
+        apiStatus.textContent = 'Checking public email-domain evidence...';
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        try {
+          if (window.location.protocol === 'file:') {
+            results.textContent = 'Start server.py and open http://127.0.0.1:8765';
+            return;
+          }
+          const response = await fetch(`/api/email-report?email=${encodeURIComponent(email)}`, {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' }
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            results.textContent = payload.error || 'Public email report failed.';
+            return;
+          }
+          const report = payload.result;
+          const domain = report.domain_report || {};
+          const signals = domain.signals || {};
+          results.textContent = [
+            `Public report for ${report.email}`,
+            `Syntax: ${report.valid_email_syntax ? 'valid' : 'invalid'}`,
+            `Domain: ${report.domain || 'n/a'} | Provider: ${report.mail_provider || 'unknown'}`,
+            `Google scope: ${report.google_account_scope || 'n/a'} | Address type: ${report.address_type || 'n/a'}`,
+            `Deliverability signal: ${report.deliverability_signal || 'n/a'}${report.domain_suggestion ? ` | Possible typo: ${report.domain_suggestion}` : ''}`,
+            `Domain status: ${String(domain.status || 'unknown').toUpperCase()} | Health: ${domain.health_score ?? 'n/a'}/100`,
+            `DNS: ${signals.dns_resolves ? 'resolves' : 'not confirmed'} | MX: ${signals.mail_exchange_present ? 'present' : 'not confirmed'}`,
+            report.gmail_alias_notes ? `Gmail alias notes: ${report.gmail_alias_notes.join(' ')}` : '',
+            'Account verification: not performed',
+            'Credential check: not performed',
+            report.privacy_note
+          ].join('\n');
+          apiStatus.textContent = 'Public email report complete';
+        } catch (error) {
+          results.textContent = error.name === 'AbortError' ? 'Public email report timed out.' : `Report error: ${error.message}`;
+          apiStatus.textContent = 'Public email report unavailable';
+        } finally {
+          clearTimeout(timeout);
+          emailReportBtn.disabled = false;
+        }
+      }
+
     async function fetchDomainResult(domain) {
       if (!domain) return { error: 'No valid domain' };
       if (window.location.protocol === 'file:') {
         return { error: 'Start server.py and open http://127.0.0.1:8765' };
       }
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 12000);
       try {
@@ -597,6 +651,11 @@ admin@gmial.com:password123</textarea>
         row.domain_confidence = result.confidence || 'unknown';
         row.domain_health_score = result.health_score ?? 'n/a';
         row.mail_provider = result.mail_provider || 'Other/Custom';
+        row.provider_scope = result.mail_provider === 'Google Workspace'
+          ? 'Google-hosted mail infrastructure detected for this domain'
+          : 'Public mail infrastructure classification only';
+        row.account_verification = 'not_performed';
+        row.credential_check = 'not_performed';
         row.dns_resolves = result.signals && result.signals.dns_resolves ? 'yes' : 'no';
         row.mx_hosts = mx.map(item => item[1]).join(' | ');
         row.smtp_connected = result.signals && result.signals.smtp_connected ? 'yes' : 'no';
@@ -663,6 +722,7 @@ admin@gmial.com:password123</textarea>
     }
 
     validateBtn.addEventListener('click', () => runAudit(highLog.checked));
+    emailReportBtn.addEventListener('click', runEmailReport);
     runNowBtn.addEventListener('click', () => {
       realDomainCheck.checked = true;
       apiStatus.textContent = 'Running real domain audit...';

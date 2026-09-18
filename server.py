@@ -20,6 +20,8 @@ MAX_PROBES_PER_WINDOW = 12
 DOMAIN_COOLDOWN_SECONDS = 10
 MAX_IN_FLIGHT_PROBES = 2
 REQUEST_TIMEOUT_SECONDS = 30
+MAX_EMAIL_LENGTH = 320
+EMAIL_REPORT_CACHE_SECONDS = 300
 
 
 class AuditorHandler(BaseHTTPRequestHandler):
@@ -27,6 +29,7 @@ class AuditorHandler(BaseHTTPRequestHandler):
     _client_requests = {}
     _domain_requests = {}
     _probe_slots = threading.BoundedSemaphore(MAX_IN_FLIGHT_PROBES)
+    _email_report_cache = {}
 
     def _send(self, status, payload, content_type="application/json; charset=utf-8"):
         body = payload if isinstance(payload, bytes) else (
@@ -46,6 +49,9 @@ class AuditorHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/probe":
             self._probe(parse_qs(parsed.query).get("domain", [""])[0])
+            return
+        if parsed.path == "/api/email-report":
+            self._email_report(parse_qs(parsed.query).get("email", [""])[0])
             return
         if parsed.path in ("/", "/main"):
             self._serve_main()
@@ -95,6 +101,72 @@ class AuditorHandler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "result": result})
         except Exception as exc:
             self._send(502, {"ok": False, "error": "Probe failed", "detail": str(exc)[:300]})
+        finally:
+            self._probe_slots.release()
+
+    def _email_report(self, raw_email):
+        if not isinstance(raw_email, str) or not raw_email or len(raw_email) > MAX_EMAIL_LENGTH:
+            self._send(400, {"ok": False, "error": "Email is missing or too long"})
+            return
+        address = smtp_probe.split_email_address(raw_email)
+        if not address["valid"]:
+            self._send(
+                400,
+                {
+                    "ok": False,
+                    "result": smtp_probe.build_email_report(
+                        raw_email, probe_domain_result=False
+                    ),
+                },
+            )
+            return
+        cache_key = address["input"].lower()
+        now = time.monotonic()
+        with self._rate_lock:
+            cached = self._email_report_cache.get(cache_key)
+            if cached and now - cached[0] < EMAIL_REPORT_CACHE_SECONDS:
+                report = dict(cached[1])
+                report["cached"] = True
+                self._send(200, {"ok": True, "result": report})
+                return
+            if cached:
+                self._email_report_cache.pop(cache_key, None)
+        allowed, retry_after, reason = self._allow_probe(
+            self.client_address[0], address["domain"]
+        )
+        if not allowed:
+            self._send(
+                429,
+                {
+                    "ok": False,
+                    "error": reason,
+                    "retry_after_seconds": retry_after,
+                },
+            )
+            return
+        if not self._probe_slots.acquire(blocking=False):
+            self._send(
+                429,
+                {
+                    "ok": False,
+                    "error": "Too many probes are running; try again shortly",
+                    "retry_after_seconds": 2,
+                },
+            )
+            return
+        try:
+            report = smtp_probe.build_email_report(raw_email, probe_domain_result=True)
+            with self._rate_lock:
+                self._email_report_cache[cache_key] = (time.monotonic(), dict(report))
+                if len(self._email_report_cache) > 512:
+                    oldest = sorted(
+                        self._email_report_cache.items(), key=lambda item: item[1][0]
+                    )[:128]
+                    for key, _ in oldest:
+                        self._email_report_cache.pop(key, None)
+            self._send(200, {"ok": True, "result": report})
+        except Exception as exc:
+            self._send(502, {"ok": False, "error": "Email report failed", "detail": str(exc)[:300]})
         finally:
             self._probe_slots.release()
 

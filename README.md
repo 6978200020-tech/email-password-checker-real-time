@@ -80,6 +80,24 @@ The probe checks:
 
 It never attempts authentication, recipient validation, or message delivery.
 
+For an address-level public report, use the local endpoint
+`/api/email-report?email=user%40example.com`. It returns syntax status and the
+same public domain/DNS evidence as the domain audit, including common provider
+classification such as Google Workspace. `account_verification` and
+`credential_check` are always `not_performed`; no endpoint can prove that a
+specific Google user or password is real. Address reports share the same
+rate-limit and domain cooldown protections as normal probes.
+Repeated requests for the same normalized address return a short-lived cached
+public report, which avoids unnecessary repeat DNS traffic and reduces
+rate-limit responses without bypassing provider controls. Reports also include
+the local-part type (individual/unknown or role/shared), a possible common
+domain typo, a public deliverability signal, and a separate Google consumer
+scope for `gmail.com`/`googlemail.com`. Gmail alias notes describe dot and
+plus-addressing conventions only; they do not verify that the user exists.
+The browser UI exposes the same feature through **Public Email Report**; it
+uses only the first input line's email portion and never sends the
+`email:password` value to this endpoint.
+
 ## Operational limits
 
 Remote providers may rate-limit or refuse SMTP probes; no client can guarantee
