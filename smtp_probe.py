@@ -153,9 +153,15 @@ def split_email_address(email):
         return {"input": value, "valid": False, "local": "", "domain": ""}
     local, raw_domain = value.rsplit("@", 1)
     domain = normalize_domain(raw_domain)
-    valid = bool(local and domain and len(local) <= 64 and not any(
-        char.isspace() for char in local
-    ))
+    valid_local = bool(
+        local
+        and len(local) <= 64
+        and not local.startswith(".")
+        and not local.endswith(".")
+        and ".." not in local
+        and re.fullmatch(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+", local)
+    )
+    valid = bool(valid_local and domain and len(value) <= 254)
     return {
         "input": value,
         "valid": valid,
@@ -164,7 +170,40 @@ def split_email_address(email):
     }
 
 
-def build_email_report(email, probe_domain_result=True):
+def canonicalize_consumer_google_address(local, domain):
+    """Return a delivery-equivalence hint for Gmail aliases, not verification."""
+    if domain not in CONSUMER_GOOGLE_DOMAINS:
+        return ""
+    base = local.split("+", 1)[0].replace(".", "").lower()
+    return "%s@gmail.com" % base if base else ""
+
+
+def summarize_public_mail_security(domain_result):
+    """Summarize published DNS policy without inferring mailbox existence."""
+    spf = bool(domain_result.get("spf", {}).get("spf"))
+    dmarc = bool(domain_result.get("dmarc", {}).get("dmarc"))
+    policy = domain_result.get("mail_security", {})
+    mta_sts = bool(policy.get("mta_sts", {}).get("txt"))
+    tls_rpt = bool(policy.get("tls_rpt", {}).get("txt"))
+    dkim = bool(policy.get("dkim"))
+    return {
+        "spf_published": spf,
+        "dmarc_published": dmarc,
+        "dkim_selector_found": dkim,
+        "mta_sts_published": mta_sts,
+        "tls_reporting_published": tls_rpt,
+        "published_controls": sum(
+            (spf, dmarc, dkim, mta_sts, tls_rpt)
+        ),
+        "assessment": (
+            "published_mail_security_signals_found"
+            if any((spf, dmarc, dkim, mta_sts, tls_rpt))
+            else "no_common_mail_security_signal_found"
+        ),
+    }
+
+
+def build_email_report(email, probe_domain_result=True, domain_result=None):
     """Return public domain evidence only; never check credentials or a mailbox."""
     address = split_email_address(email)
     report = {
@@ -187,24 +226,37 @@ def build_email_report(email, probe_domain_result=True):
     report["domain_suggestion"] = COMMON_DOMAIN_TYPOS.get(address["domain"], "")
     if address["domain"] in CONSUMER_GOOGLE_DOMAINS:
         report["google_account_scope"] = "Google consumer mail domain"
+        report["google_alias_canonical_hint"] = canonicalize_consumer_google_address(
+            local, address["domain"]
+        )
         report["gmail_alias_notes"] = [
             "Dots in the Gmail local part are generally ignored for delivery.",
             "A plus suffix is commonly used for labels, such as user+tag@gmail.com.",
         ]
     else:
         report["google_account_scope"] = "Not a consumer Gmail domain"
-    if not probe_domain_result:
+        report["google_alias_canonical_hint"] = ""
+    if domain_result is None and not probe_domain_result:
         report["status"] = "syntax_valid"
         return report
-    result = probe_domain(address["domain"], probe_mx_connect=False)
+    result = (
+        domain_result
+        if domain_result is not None
+        else probe_domain(address["domain"], probe_mx_connect=False)
+    )
     report["domain_report"] = result
     provider = result.get("mail_provider", "Other/Custom")
-    report["mail_provider"] = provider
-    if provider == "Google Workspace":
+    if address["domain"] in CONSUMER_GOOGLE_DOMAINS:
+        report["mail_provider"] = "Google consumer Gmail"
+        report["provider_scope"] = "Google consumer mail infrastructure detected"
+    elif provider == "Google Workspace":
+        report["mail_provider"] = provider
         report["provider_scope"] = (
             "Google-hosted mail infrastructure detected for this domain"
         )
+        report["google_account_scope"] = "Google Workspace/custom domain"
     else:
+        report["mail_provider"] = provider
         report["provider_scope"] = "Public mail infrastructure classification only"
     signals = result.get("signals", {})
     if result.get("status") == "active" and signals.get("mail_exchange_present"):
@@ -213,6 +265,16 @@ def build_email_report(email, probe_domain_result=True):
         report["deliverability_signal"] = "public_mail_infrastructure_uncertain"
     else:
         report["deliverability_signal"] = "no_confirmed_mail_exchange"
+    report["public_mail_security"] = summarize_public_mail_security(result)
+    report["evidence_scope"] = [
+        "syntax",
+        "public_dns",
+        "mx_provider_classification",
+        "published_mail_security",
+    ]
+    report["verification_limit"] = (
+        "A specific Google user, mailbox, password, or login session was not verified."
+    )
     report["status"] = "domain_reported"
     return report
 

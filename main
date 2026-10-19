@@ -160,6 +160,17 @@
       margin-bottom: 20px;
     }
 
+    .account-status {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border: 1px solid #f3c26b;
+      border-radius: 12px;
+      background: #fff8e8;
+      color: #7a4b00;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
     .progress {
       height: 8px;
       margin: 0 0 16px;
@@ -226,6 +237,19 @@
       line-height: 1.45;
     }
 
+    .email-list-panel {
+      padding: 18px;
+      border: 1px solid #bfdbfe;
+      border-radius: 16px;
+      background: #eff6ff;
+    }
+
+    hr {
+      margin: 26px 0;
+      border: 0;
+      border-top: 1px solid var(--border);
+    }
+
     @media (max-width: 900px) {
       .summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -255,12 +279,23 @@
 <body>
   <div class="app">
     <header>
-      <h1>Advanced Local Account Quality Auditor</h1>
-      <p class="subtitle">Paste lines in <strong>email:password</strong> format. Local checks cover syntax and password hygiene; optional real domain checks inspect DNS/MX/SPF/DMARC and conservative SMTP reachability. Passwords never leave this browser. Domain checks do not log in, verify credentials, enumerate mailboxes, or prove that a specific account exists.</p>
+      <h1>Email DNS &amp; MX Checker</h1>
+      <p class="subtitle">Paste email addresses only. The checker reports syntax, DNS, MX, SPF/DMARC, provider and domain health using public infrastructure evidence. It never accepts passwords, logs in, tests recipients, or claims that a mailbox exists.</p>
     </header>
 
     <main>
-      <label for="accounts">Account input</label>
+      <section class="email-list-panel">
+        <label for="emailListInput">Email list (one address per line)</label>
+        <textarea id="emailListInput" spellcheck="false" placeholder="user@gmail.com&#10;admin@your-company.com&#10;person@example.org"></textarea>
+        <div class="actions">
+          <button class="primary" id="emailListCheckBtn" type="button">Check Email List DNS/MX</button>
+          <a class="button download" id="emailListDownload" href="#" download="email_dns_mx_report.csv">Download Email Report</a>
+        </div>
+        <p class="hint">Maximum 100 addresses per run. Only email-only lines are accepted; lines containing <code>:</code> are rejected instead of being treated as credentials. Results show domain infrastructure, not individual mailbox validity.</p>
+      </section>
+
+      <hr />
+      <label for="accounts">Legacy local audit input (optional)</label>
       <textarea id="accounts" spellcheck="false">user1@example.com:Password123!
 invalid-email:123
 user2@gmail.com:anotherSecret9
@@ -289,11 +324,12 @@ admin@gmial.com:password123</textarea>
 
       <div class="summary" aria-live="polite">
         <div class="stat"><span>Total Checked</span><strong id="totalCount">0</strong></div>
-        <div class="stat"><span>Local Pass</span><strong id="validCount">0</strong></div>
-        <div class="stat"><span>Local Review</span><strong id="reviewCount">0</strong></div>
-        <div class="stat"><span>Local Fail</span><strong id="invalidCount">0</strong></div>
-        <div class="stat"><span>Local Score</span><strong id="averageScore">0</strong></div>
+        <div class="stat"><span>Format/Hygiene Pass</span><strong id="validCount">0</strong></div>
+        <div class="stat"><span>Format/Hygiene Review</span><strong id="reviewCount">0</strong></div>
+        <div class="stat"><span>Format/Hygiene Fail</span><strong id="invalidCount">0</strong></div>
+        <div class="stat"><span>Local Hygiene Score</span><strong id="averageScore">0</strong></div>
       </div>
+      <p class="account-status"><strong>Account validity: NOT CHECKED.</strong> A format/hygiene pass does not mean the password works or that the mailbox exists. This tool never logs in or tests credentials.</p>
       <div class="progress" role="progressbar" aria-label="Audit progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div class="progress-bar" id="progressBar"></div>
       </div>
@@ -327,6 +363,9 @@ admin@gmial.com:password123</textarea>
       'abc123', 'admin', 'admin123', 'letmein', 'welcome', 'welcome1', 'iloveyou', '111111', '000000'
     ]);
     const accountsInput = document.getElementById('accounts');
+    const emailListInput = document.getElementById('emailListInput');
+    const emailListCheckBtn = document.getElementById('emailListCheckBtn');
+    const emailListDownload = document.getElementById('emailListDownload');
     const accountFile = document.getElementById('accountFile');
     const validateBtn = document.getElementById('validateBtn');
     const emailReportBtn = document.getElementById('emailReportBtn');
@@ -348,6 +387,7 @@ admin@gmial.com:password123</textarea>
     let csvObjectUrl = null;
     let liveTimer = null;
     let auditRunId = 0;
+    let emailListCsvUrl = null;
 
     function setProgress(completed, total) {
       const percent = total ? Math.round((completed / total) * 100) : 0;
@@ -533,6 +573,102 @@ admin@gmial.com:password123</textarea>
       downloadLink.classList.add('ready');
     }
 
+    function buildEmailListCsv(reports) {
+      const headers = ['row', 'email', 'syntax', 'domain', 'domain_status', 'confidence', 'health_score', 'provider', 'google_scope', 'canonical_hint', 'address_type', 'dns_resolves', 'mx_present', 'mx_hosts', 'spf', 'dmarc', 'security_signals', 'disposable_hint', 'account_verification', 'credential_check', 'notes'];
+      const rows = [headers.join(',')];
+      reports.forEach((report, index) => {
+        const domain = report.domain_report || {};
+        const signals = domain.signals || {};
+        const mx = (domain.mx_lookup && domain.mx_lookup.mx) || [];
+        const values = {
+          row: index + 1,
+          email: report.email,
+          syntax: report.valid_email_syntax ? 'valid' : 'invalid',
+          domain: report.domain || '',
+          domain_status: domain.status || report.status || 'unknown',
+          confidence: domain.confidence || '',
+          health_score: domain.health_score ?? '',
+          provider: report.mail_provider || '',
+          google_scope: report.google_account_scope || '',
+          canonical_hint: report.google_alias_canonical_hint || '',
+          address_type: report.address_type || '',
+          dns_resolves: signals.dns_resolves ? 'yes' : 'no',
+          mx_present: signals.mail_exchange_present ? 'yes' : 'no',
+          mx_hosts: mx.map(item => `${item[0]} ${item[1]}`).join(' | '),
+          spf: domain.spf && domain.spf.spf ? domain.spf.spf.join(' | ') : 'not found',
+          dmarc: domain.dmarc && domain.dmarc.dmarc ? domain.dmarc.dmarc.join(' | ') : 'not found',
+          security_signals: report.public_mail_security
+            ? report.public_mail_security.published_controls
+            : '',
+          disposable_hint: domain.disposable_hint ? 'yes' : 'no',
+          account_verification: report.account_verification || 'not_performed',
+          credential_check: report.credential_check || 'not_performed',
+          notes: (domain.notes || []).join(' | ')
+        };
+        rows.push(headers.map(header => csvEscape(values[header])).join(','));
+      });
+      return rows.join('\n');
+    }
+
+    function renderEmailListReport(reports, rejected) {
+      const lines = reports.map((report, index) => {
+        const domain = report.domain_report || {};
+        const signals = domain.signals || {};
+        const mx = (domain.mx_lookup && domain.mx_lookup.mx) || [];
+        const marker = report.valid_email_syntax && signals.mail_exchange_present ? '✅' : report.valid_email_syntax ? '⚠️' : '❌';
+        return `${marker} Row ${index + 1} | ${report.email} | Syntax: ${report.valid_email_syntax ? 'valid' : 'invalid'} | Domain: ${report.domain || 'n/a'} | Status: ${String(domain.status || report.status || 'unknown').toUpperCase()} | Provider: ${report.mail_provider || 'n/a'} | DNS: ${signals.dns_resolves ? 'yes' : 'no'} | MX: ${signals.mail_exchange_present ? 'yes' : 'no'} (${mx.map(item => item[1]).join(', ') || 'none'}) | Health: ${domain.health_score ?? 'n/a'}/100`;
+      });
+      if (rejected.length) lines.push(`\nRejected credential-shaped/non-text lines: ${rejected.join(', ')}`);
+      lines.push('\nAccount verification: not performed | Credential check: not performed');
+      lines.push('A domain/MX pass does not prove that a specific mailbox exists.');
+      results.textContent = lines.join('\n');
+    }
+
+    async function runEmailListCheck() {
+      const emails = emailListInput.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (!emails.length) {
+        results.textContent = 'Paste one email address per line first.';
+        return;
+      }
+      if (window.location.protocol === 'file:') {
+        results.textContent = 'Start server.py and open http://127.0.0.1:8765';
+        return;
+      }
+      emailListCheckBtn.disabled = true;
+      apiStatus.textContent = `Checking ${emails.length} email domain(s)...`;
+      setProgress(0, emails.length);
+      try {
+        const response = await fetch('/api/email-list-report', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+          body: JSON.stringify({emails})
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          results.textContent = payload.error || 'Email list report failed.';
+          apiStatus.textContent = 'Email list check unavailable';
+          return;
+        }
+        renderEmailListReport(payload.results, payload.rejected || []);
+        if (emailListCsvUrl) URL.revokeObjectURL(emailListCsvUrl);
+        emailListCsvUrl = URL.createObjectURL(new Blob([buildEmailListCsv(payload.results)], {type: 'text/csv;charset=utf-8'}));
+        emailListDownload.href = emailListCsvUrl;
+        emailListDownload.classList.add('ready');
+        totalCount.textContent = payload.accepted;
+        validCount.textContent = payload.results.filter(report => report.valid_email_syntax && report.domain_report && report.domain_report.signals && report.domain_report.signals.mail_exchange_present).length;
+        reviewCount.textContent = payload.results.filter(report => report.valid_email_syntax && (!report.domain_report || !report.domain_report.signals || !report.domain_report.signals.mail_exchange_present)).length;
+        invalidCount.textContent = payload.results.filter(report => !report.valid_email_syntax).length;
+        averageScore.textContent = 'n/a';
+        setProgress(payload.accepted, payload.accepted);
+        apiStatus.textContent = 'Email DNS/MX report complete';
+      } catch (error) {
+        results.textContent = `Report error: ${error.message}`;
+        apiStatus.textContent = 'Email list check unavailable';
+      } finally {
+        emailListCheckBtn.disabled = false;
+      }
+    }
+
     function renderLog(rows, verbose) {
       const logLines = rows.map(row => {
         const marker = row.status === 'PASS' ? '✅' : row.status === 'REVIEW' ? '⚠️' : '❌';
@@ -579,14 +715,22 @@ admin@gmial.com:password123</textarea>
           const report = payload.result;
           const domain = report.domain_report || {};
           const signals = domain.signals || {};
+          const mx = domain.mx_lookup && domain.mx_lookup.mx ? domain.mx_lookup.mx : [];
+          const spf = domain.spf && domain.spf.spf ? domain.spf.spf : [];
+          const dmarc = domain.dmarc && domain.dmarc.dmarc ? domain.dmarc.dmarc : [];
           results.textContent = [
             `Public report for ${report.email}`,
             `Syntax: ${report.valid_email_syntax ? 'valid' : 'invalid'}`,
             `Domain: ${report.domain || 'n/a'} | Provider: ${report.mail_provider || 'unknown'}`,
-            `Google scope: ${report.google_account_scope || 'n/a'} | Address type: ${report.address_type || 'n/a'}`,
+            `Google scope: ${report.google_account_scope || 'n/a'} | Provider scope: ${report.provider_scope || 'n/a'} | Address type: ${report.address_type || 'n/a'}`,
+            report.google_alias_canonical_hint ? `Gmail canonical alias hint: ${report.google_alias_canonical_hint}` : '',
             `Deliverability signal: ${report.deliverability_signal || 'n/a'}${report.domain_suggestion ? ` | Possible typo: ${report.domain_suggestion}` : ''}`,
             `Domain status: ${String(domain.status || 'unknown').toUpperCase()} | Health: ${domain.health_score ?? 'n/a'}/100`,
-            `DNS: ${signals.dns_resolves ? 'resolves' : 'not confirmed'} | MX: ${signals.mail_exchange_present ? 'present' : 'not confirmed'}`,
+            `DNS: ${signals.dns_resolves ? 'resolves' : 'not confirmed'} | MX: ${signals.mail_exchange_present ? mx.map(item => `${item[0]} ${item[1]}`).join(', ') : 'not confirmed'}`,
+            `SPF: ${spf.length ? spf.join(' | ') : 'not found'} | DMARC: ${dmarc.length ? dmarc.join(' | ') : 'not found'}`,
+            report.public_mail_security ? `Published security signals: ${report.public_mail_security.published_controls}/5 (${report.public_mail_security.assessment})` : '',
+            `Disposable-domain hint: ${domain.disposable_hint ? 'yes' : 'no'} | SMTP recipient check: not performed`,
+            domain.notes && domain.notes.length ? `Domain notes: ${domain.notes.join(' ')}` : '',
             report.gmail_alias_notes ? `Gmail alias notes: ${report.gmail_alias_notes.join(' ')}` : '',
             'Account verification: not performed',
             'Credential check: not performed',
@@ -722,6 +866,7 @@ admin@gmial.com:password123</textarea>
     }
 
     validateBtn.addEventListener('click', () => runAudit(highLog.checked));
+    emailListCheckBtn.addEventListener('click', runEmailListCheck);
     emailReportBtn.addEventListener('click', runEmailReport);
     runNowBtn.addEventListener('click', () => {
       realDomainCheck.checked = true;

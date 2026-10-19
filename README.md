@@ -1,8 +1,9 @@
 # email-password-checker-real-time
 
-This repo includes a privacy-safe local email quality auditor. It performs local
-format/password hygiene checks and, when explicitly enabled, real DNS/MX/SPF/DMARC
-and conservative SMTP reachability checks.
+This repo includes a privacy-safe local email quality auditor and a batch
+email-list DNS/MX checker. It performs real DNS/MX/SPF/DMARC lookups and, when
+explicitly enabled for the legacy domain audit, conservative SMTP reachability
+checks.
 
 It does **not** test email/password credentials against Google, Microsoft, or any
 other provider. Passwords stay in the browser and are never sent to a server.
@@ -16,20 +17,33 @@ infrastructure.
 2. `run_auditor.bat`-এ double-click করুন।
 3. প্রথমবার DNS package install হতে কয়েক সেকেন্ড লাগতে পারে।
 4. Browser নিজে খুলবে; না খুললে `http://127.0.0.1:8765` খুলুন।
-5. `email:password` format-এ নিজের test data দিন। উদাহরণ:
+5. সাধারণ DNS/MX report-এর জন্য **Email list** box-এ শুধু এক লাইনে একটি email
+   দিন:
+
+   ```text
+   user@gmail.com
+   admin@your-company.com
+   person@example.org
+   ```
+
+   **Check Email List DNS/MX** চাপলে syntax, DNS, MX host, provider,
+   SPF/DMARC এবং domain health/status রিপোর্ট হবে। CSV download-ও করা যাবে।
+   সর্বোচ্চ 100টি address একবারে নেওয়া হয়।
+6. পুরনো local password-hygiene audit দরকার হলে নিচের legacy input-এ
+   `email:password` format ব্যবহার করতে পারেন। উদাহরণ:
 
    ```text
    test@gmail.com:ExamplePassword!123
    user@example.com:AnotherPassword!456
    ```
 
-6. শুধু local password/format check চাইলে **Real DNS/MX checks** unchecked রাখুন।
+7. শুধু local password/format check চাইলে **Real DNS/MX checks** unchecked রাখুন।
    `.txt` বা `.csv` list চাইলে **Load a local list** ব্যবহার করতে পারেন; file
    browser-এর ভেতরেই পড়া হয়, server-এ upload হয় না, এবং 5 MB/5,000-line limit
    আছে।
    Domain সত্যিই mail server-এ active কি না দেখতে সেটি checked করে **Run Audit &
    Build CSV** চাপুন।
-7. কাজ শেষ হলে terminal window-তে `Ctrl+C` চাপুন।
+8. কাজ শেষ হলে terminal window-তে `Ctrl+C` চাপুন।
 
 Password কোনো server-এ login করার জন্য ব্যবহার করা হয় না; report-এ password
 শুধু masked অবস্থায় থাকে।
@@ -85,18 +99,37 @@ For an address-level public report, use the local endpoint
 same public domain/DNS evidence as the domain audit, including common provider
 classification such as Google Workspace. `account_verification` and
 `credential_check` are always `not_performed`; no endpoint can prove that a
-specific Google user or password is real. Address reports share the same
+specific Google user or password is real. Uncached address reports share the same
 rate-limit and domain cooldown protections as normal probes.
-Repeated requests for the same normalized address return a short-lived cached
-public report, which avoids unnecessary repeat DNS traffic and reduces
-rate-limit responses without bypassing provider controls. Reports also include
-the local-part type (individual/unknown or role/shared), a possible common
-domain typo, a public deliverability signal, and a separate Google consumer
-scope for `gmail.com`/`googlemail.com`. Gmail alias notes describe dot and
-plus-addressing conventions only; they do not verify that the user exists.
+Repeated requests for the same normalized address or domain reuse a
+short-lived public-domain report, which avoids unnecessary repeat DNS traffic
+and local rate-limit responses without bypassing provider controls. Reports
+also include the local-part type (individual/unknown or role/shared), a possible
+common domain typo, a public deliverability signal, published
+SPF/DMARC/DKIM/MTA-STS security signals, and a separate Google
+consumer/Workspace scope. Gmail consumer addresses are distinguished from
+Google Workspace custom domains in the provider label. For
+`gmail.com`/`googlemail.com`, the report may show a canonical alias hint based
+on Gmail's documented dot/plus conventions. This is only a delivery-equivalence
+hint; it does not verify that the user exists. The report never uses recipient
+commands, login attempts, retries, proxy rotation, or other block-evasion
+techniques. Provider rate limits and refusals remain valid results.
 The browser UI exposes the same feature through **Public Email Report**; it
 uses only the first input line's email portion and never sends the
 `email:password` value to this endpoint.
+
+For a batch email-only report, send a JSON POST to
+`/api/email-list-report`:
+
+```json
+{"emails":["user@gmail.com","admin@example.org"]}
+```
+
+The endpoint accepts at most 100 addresses per request, rejects
+credential-shaped lines containing `:`, deduplicates domain lookups, and
+reuses cached public-domain evidence. It checks public DNS and mail-policy
+signals, but never performs SMTP recipient checks, login, password checks,
+mailbox enumeration, or delivery.
 
 ## Operational limits
 

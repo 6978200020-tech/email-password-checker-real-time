@@ -7,6 +7,7 @@ import threading
 import webbrowser
 import argparse
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -22,6 +23,10 @@ MAX_IN_FLIGHT_PROBES = 2
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_EMAIL_LENGTH = 320
 EMAIL_REPORT_CACHE_SECONDS = 300
+DOMAIN_REPORT_CACHE_SECONDS = 300
+MAX_EMAIL_LIST_ITEMS = 100
+MAX_BATCH_BODY_BYTES = 1_000_000
+MAX_BATCH_REQUESTS_PER_WINDOW = 3
 
 
 class AuditorHandler(BaseHTTPRequestHandler):
@@ -30,6 +35,8 @@ class AuditorHandler(BaseHTTPRequestHandler):
     _domain_requests = {}
     _probe_slots = threading.BoundedSemaphore(MAX_IN_FLIGHT_PROBES)
     _email_report_cache = {}
+    _domain_report_cache = {}
+    _batch_requests = {}
 
     def _send(self, status, payload, content_type="application/json; charset=utf-8"):
         body = payload if isinstance(payload, bytes) else (
@@ -57,6 +64,171 @@ class AuditorHandler(BaseHTTPRequestHandler):
             self._serve_main()
             return
         self._send(404, {"ok": False, "error": "Not found"})
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/email-list-report":
+            self._email_list_report()
+            return
+        self._send(404, {"ok": False, "error": "Not found"})
+
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None, "Invalid request length"
+        if length <= 0 or length > MAX_BATCH_BODY_BYTES:
+            return None, "Request body is missing or too large"
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8")), ""
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None, "Request body must be valid JSON"
+
+    def _email_list_report(self):
+        payload, error = self._read_json_body()
+        if error:
+            self._send(400, {"ok": False, "error": error})
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("emails"), list):
+            self._send(400, {"ok": False, "error": "Send an emails array"})
+            return
+        raw_emails = payload["emails"]
+        if not raw_emails or len(raw_emails) > MAX_EMAIL_LIST_ITEMS:
+            self._send(
+                400,
+                {"ok": False, "error": "Provide between 1 and 100 email addresses"},
+            )
+            return
+        client = self.client_address[0]
+        if not self._allow_batch(client):
+            self._send(
+                429,
+                {
+                    "ok": False,
+                    "error": "Batch limit reached; wait before starting another list",
+                    "retry_after_seconds": RATE_WINDOW_SECONDS,
+                },
+            )
+            return
+
+        emails = []
+        seen = set()
+        rejected = []
+        for item in raw_emails:
+            if not isinstance(item, str):
+                rejected.append("non-text input")
+                continue
+            value = item.strip()
+            if not value:
+                continue
+            # Deliberately reject credential-shaped input instead of guessing
+            # which part is an address.
+            if ":" in value:
+                rejected.append(value[:120])
+                continue
+            address = smtp_probe.split_email_address(value)
+            key = address["input"].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            emails.append(value)
+        if not emails:
+            self._send(
+                400,
+                {
+                    "ok": False,
+                    "error": "No email-only lines found; password formats are not accepted",
+                    "rejected": rejected[:10],
+                },
+            )
+            return
+
+        domain_names = list(dict.fromkeys(
+            smtp_probe.split_email_address(email)["domain"]
+            for email in emails
+            if smtp_probe.split_email_address(email)["valid"]
+        ))
+
+        def make_domain_report(domain):
+            try:
+                cached = self._get_cached_domain_report(domain)
+                if cached is not None:
+                    return domain, cached, ""
+                if not self._probe_slots.acquire(timeout=REQUEST_TIMEOUT_SECONDS):
+                    return domain, None, "Probe capacity timed out"
+                try:
+                    result = smtp_probe.probe_domain(
+                        domain, probe_mx_connect=False
+                    )
+                    self._cache_domain_report(domain, result)
+                    return domain, result, ""
+                finally:
+                    self._probe_slots.release()
+            except Exception as exc:
+                return domain, None, str(exc)[:200]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            domain_results = dict(
+                (domain, (result, error))
+                for domain, result, error in executor.map(
+                    make_domain_report, domain_names
+                )
+            )
+
+        def make_report(email):
+            address = smtp_probe.split_email_address(email)
+            if not address["valid"]:
+                return smtp_probe.build_email_report(
+                    email, probe_domain_result=False
+                )
+            domain_result, error = domain_results.get(
+                address["domain"], (None, "Domain report unavailable")
+            )
+            if error:
+                return {
+                    "email": email,
+                    "valid_email_syntax": True,
+                    "status": "error",
+                    "error": error,
+                }
+            return smtp_probe.build_email_report(
+                email,
+                probe_domain_result=False,
+                domain_result=domain_result,
+            )
+
+        reports = [make_report(email) for email in emails]
+        self._send(
+            200,
+            {
+                "ok": True,
+                "results": reports,
+                "accepted": len(reports),
+                "rejected": rejected[:10],
+                "limits": {
+                    "max_items": MAX_EMAIL_LIST_ITEMS,
+                    "account_verification": "not_performed",
+                    "credential_check": "not_performed",
+                    "smtp_recipient_probe": "not_performed",
+                },
+            },
+        )
+
+    @classmethod
+    def _allow_batch(cls, client):
+        now = time.monotonic()
+        with cls._rate_lock:
+            history = [
+                timestamp
+                for timestamp in cls._batch_requests.get(client, [])
+                if now - timestamp < RATE_WINDOW_SECONDS
+            ]
+            if len(history) >= MAX_BATCH_REQUESTS_PER_WINDOW:
+                cls._batch_requests[client] = history
+                return False
+            history.append(now)
+            cls._batch_requests[client] = history
+            return True
 
     def _probe(self, raw_domain):
         if not isinstance(raw_domain, str) or len(raw_domain) > MAX_DOMAIN_LENGTH:
@@ -131,6 +303,20 @@ class AuditorHandler(BaseHTTPRequestHandler):
                 return
             if cached:
                 self._email_report_cache.pop(cache_key, None)
+        cached_domain_report = self._get_cached_domain_report(address["domain"])
+        if cached_domain_report is not None:
+            report = smtp_probe.build_email_report(
+                raw_email,
+                probe_domain_result=False,
+                domain_result=cached_domain_report,
+            )
+            report["cached"] = True
+            with self._rate_lock:
+                self._email_report_cache[cache_key] = (
+                    time.monotonic(), dict(report)
+                )
+            self._send(200, {"ok": True, "result": report})
+            return
         allowed, retry_after, reason = self._allow_probe(
             self.client_address[0], address["domain"]
         )
@@ -156,6 +342,9 @@ class AuditorHandler(BaseHTTPRequestHandler):
             return
         try:
             report = smtp_probe.build_email_report(raw_email, probe_domain_result=True)
+            self._cache_domain_report(
+                address["domain"], report.get("domain_report", {})
+            )
             with self._rate_lock:
                 self._email_report_cache[cache_key] = (time.monotonic(), dict(report))
                 if len(self._email_report_cache) > 512:
@@ -169,6 +358,36 @@ class AuditorHandler(BaseHTTPRequestHandler):
             self._send(502, {"ok": False, "error": "Email report failed", "detail": str(exc)[:300]})
         finally:
             self._probe_slots.release()
+
+    @classmethod
+    def _get_cached_domain_report(cls, domain):
+        now = time.monotonic()
+        with cls._rate_lock:
+            entry = cls._domain_report_cache.get(domain)
+            if entry and now - entry[0] < DOMAIN_REPORT_CACHE_SECONDS:
+                return entry[1]
+            if entry:
+                cls._domain_report_cache.pop(domain, None)
+        return None
+
+    @classmethod
+    def _cache_domain_report(cls, domain, result):
+        with cls._rate_lock:
+            cls._domain_report_cache[domain] = (time.monotonic(), result)
+            if len(cls._domain_report_cache) > 512:
+                now = time.monotonic()
+                cls._domain_report_cache = {
+                    key: entry
+                    for key, entry in cls._domain_report_cache.items()
+                    if now - entry[0] < DOMAIN_REPORT_CACHE_SECONDS
+                }
+                if len(cls._domain_report_cache) > 512:
+                    oldest = sorted(
+                        cls._domain_report_cache.items(),
+                        key=lambda item: item[1][0],
+                    )[:-512]
+                    for key, _ in oldest:
+                        cls._domain_report_cache.pop(key, None)
 
     @classmethod
     def _allow_probe(cls, client, domain):
